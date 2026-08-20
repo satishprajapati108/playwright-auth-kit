@@ -7,6 +7,8 @@ re-doing a UI login.
 
 Clone this repo into any project, point it at your app, and go.
 
+![Session flow: load config, globalSetup checks for a saved session, logs in manually if missing, saves it, and the fixture self-heals the same way per test](docs/auth-session-flow.png)
+
 ## What it gives you
 
 - **One manual login, ever (until you delete it).** A `globalSetup` hook opens
