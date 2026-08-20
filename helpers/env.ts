@@ -43,21 +43,26 @@ function persistToEnvFile(updates: Record<string, string>): void {
 
 /**
  * Resolves the config needed to log in, prompting the user for anything
- * missing (BASE_URL / USERNAME / PASSWORD) when running locally.
+ * missing (BASE_URL / LOGIN_USERNAME / LOGIN_PASSWORD) when running locally.
  * On CI, missing required values throw immediately instead of hanging on a prompt.
+ *
+ * Deliberately not named USERNAME/PASSWORD: Windows sets USERNAME as a
+ * built-in OS environment variable (the logged-in user), and dotenv never
+ * overrides an existing process.env value - so a plain USERNAME= in .env
+ * would be silently ignored on Windows in favor of the OS username.
  */
 export async function resolveConfig(): Promise<AppConfig> {
   let baseUrl = process.env.BASE_URL ?? "";
-  let username = process.env.USERNAME ?? "";
-  let password = process.env.PASSWORD ?? "";
+  let username = process.env.LOGIN_USERNAME ?? "";
+  let password = process.env.LOGIN_PASSWORD ?? "";
 
   const missing = !baseUrl || !username || !password;
 
   if (missing && isCI()) {
     const missingKeys = [
       !baseUrl && "BASE_URL",
-      !username && "USERNAME",
-      !password && "PASSWORD",
+      !username && "LOGIN_USERNAME",
+      !password && "LOGIN_PASSWORD",
     ].filter(Boolean);
     throw new Error(
       `Missing required env var(s) on CI: ${missingKeys.join(", ")}. ` +
@@ -75,11 +80,11 @@ export async function resolveConfig(): Promise<AppConfig> {
     }
     if (!username) {
       username = await ask("Username: ");
-      toPersist.USERNAME = username;
+      toPersist.LOGIN_USERNAME = username;
     }
     if (!password) {
       password = await askHidden("Password: ");
-      toPersist.PASSWORD = password;
+      toPersist.LOGIN_PASSWORD = password;
     }
 
     if (Object.keys(toPersist).length > 0) {

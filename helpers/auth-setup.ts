@@ -9,7 +9,8 @@ import { ensureSession } from "./session-manager";
  */
 export default async function globalSetup(_config: FullConfig): Promise<void> {
   const appConfig = await resolveConfig();
-  const browser = await chromium.launch();
+  const debug = process.env.LOGIN_DEBUG === "1" || process.env.LOGIN_DEBUG === "true";
+  const browser = await chromium.launch({ headless: !debug, slowMo: debug ? 250 : 0 });
   try {
     await ensureSession(browser, appConfig);
   } finally {

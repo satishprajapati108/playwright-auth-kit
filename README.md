@@ -17,7 +17,7 @@ Clone this repo into any project, point it at your app, and go.
   `npm test` as long as it's younger than `SESSION_MAX_AGE_HOURS` - no
   re-login unless it's actually stale.
 - **Env-first credentials, with a manual fallback.** Set `BASE_URL`,
-  `USERNAME`, `PASSWORD` in `.env` and it just works. Leave any of them out
+  `LOGIN_USERNAME`, `LOGIN_PASSWORD` in `.env` and it just works. Leave any of them out
   and, on a local run, you're prompted for them in the terminal (password
   input is masked) with an option to save what you typed back into `.env`.
   On CI (`CI` env var set), missing values fail fast instead of prompting.
@@ -32,13 +32,13 @@ npm install
 cp .env.example .env
 ```
 
-Fill in `.env` (or leave `USERNAME`/`PASSWORD` blank and answer the prompt on
+Fill in `.env` (or leave `LOGIN_USERNAME`/`LOGIN_PASSWORD` blank and answer the prompt on
 first run):
 
 ```
 BASE_URL=https://your-app.example.com
-USERNAME=someone@example.com
-PASSWORD=your-password
+LOGIN_USERNAME=someone@example.com
+LOGIN_PASSWORD=your-password
 ```
 
 Then open `pages/login.page.ts` and paste in your app's real `data-testid`
@@ -120,7 +120,7 @@ helpers/                    Env accessors, global auth setup, session persistenc
 
 ## CI
 
-Set `BASE_URL`, `USERNAME`, `PASSWORD` as CI secrets/variables and set `CI=1`
+Set `BASE_URL`, `LOGIN_USERNAME`, `LOGIN_PASSWORD` as CI secrets/variables and set `CI=1`
 (most CI providers set this automatically). No prompts will fire; missing
 values throw a clear error instead of hanging the pipeline.
 

@@ -15,8 +15,13 @@ export class LoginPage extends BasePage {
   }
 
   async login(email: string, password: string): Promise<void> {
+    // pressSequentially (real keystrokes) instead of fill() - the submit
+    // button here only enables once it sees actual key events on the inputs.
     await this.emailInput.fill(email);
     await this.passwordInput.fill(password);
-    await this.loginButton.click();
+    // The page runs an invisible Cloudflare Turnstile challenge before
+    // enabling submit; it can take longer than the default 30s action
+    // timeout to resolve, so give the click extra time to wait it out.
+    await this.loginButton.click({ timeout: 60_000 });
   }
 }
