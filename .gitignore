@@ -1,0 +1,26 @@
+node_modules/
+dist/
+dist-scripts/
+
+# Playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+blob-report/
+
+# Session storage - never commit real sessions
+.auth/
+*.session.json
+
+# Env files - never commit real credentials
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+npm-debug.log*
