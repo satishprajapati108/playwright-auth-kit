@@ -56,6 +56,12 @@ step to work.
 
 ## Running tests
 
+`ensureManualSession()` in [helpers/auth-setup.ts](helpers/auth-setup.ts) is the
+function underlying both `globalSetup` and the self-healing fixture below -
+here's exactly what it does:
+
+![ensureManualSession() flow: check for an existing session file, otherwise launch a headed browser, auto-fill and click when both credentials are set (or leave the fields blank for a manual login), wait for redirect off /login, then save storageState and close the browser](docs/auth-setup-flow.png)
+
 ```bash
 npm test              # headless
 npm run test:headed   # see the browser
