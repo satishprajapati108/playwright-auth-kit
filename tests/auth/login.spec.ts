@@ -1,9 +1,10 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../fixtures";
+import { LoginPage } from "../../pages/login.page";
 
 /**
- * Because playwright.config.ts sets `use.storageState` to the session file
- * helpers/auth-setup.ts produced, this page loads already authenticated -
- * no login steps needed here or in any other test file.
+ * Importing `test`/`expect` from fixtures/ (not "@playwright/test" directly)
+ * makes the session self-healing: it's created on demand if missing, instead
+ * of throwing ENOENT. See fixtures/auth.fixture.ts.
  */
 test("home page loads while already authenticated", async ({ page }) => {
   await page.goto("/");

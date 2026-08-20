@@ -5,13 +5,16 @@ import { BasePage } from "./base.page";
  * Login POM. Paste your app's real data-testid locators here - this is the
  * one file that talks to the actual login page.
  */
+
 export class LoginPage extends BasePage {
   readonly emailInput: Locator = this.page.getByTestId("login-email-input");
   readonly passwordInput: Locator = this.page.getByTestId("login-password-input");
   readonly loginButton: Locator = this.page.getByTestId("login-submit-button");
 
   async open(baseUrl: string): Promise<void> {
-    await this.page.goto(`${baseUrl}/login`);
+    // Use URL (not plain concatenation) so a trailing slash on baseUrl
+    // doesn't produce a double slash (e.g. ".../login").
+    await this.page.goto(new URL("/login", baseUrl).toString());
   }
 
   async login(email: string, password: string): Promise<void> {

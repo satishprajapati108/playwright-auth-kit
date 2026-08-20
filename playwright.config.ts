@@ -1,10 +1,7 @@
 import * as dotenv from "dotenv";
 import { defineConfig, devices } from "@playwright/test";
-import { sessionFilePath } from "./helpers/session-manager";
 
 dotenv.config();
-
-const sessionKey = process.env.SESSION_KEY || "default";
 
 export default defineConfig({
   testDir: "./tests",
@@ -13,15 +10,16 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [["html"], ["github"]] : "html",
 
-  // Logs in (or reuses a saved session) once before any test runs.
+  // Logs in (or reuses a saved session) once before any worker starts, so
+  // workers don't race to open a login browser at the same time. Specs still
+  // need to import `test`/`expect` from fixtures/ (not "@playwright/test"
+  // directly) to get a session even if this didn't run - see fixtures/auth.fixture.ts.
   globalSetup: "./helpers/auth-setup.ts",
 
   use: {
     baseURL: process.env.BASE_URL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    // Every test starts already authenticated via the session global-setup saved.
-    storageState: sessionFilePath(sessionKey),
   },
 
   projects: [
@@ -29,13 +27,13 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
-    {
-      name: "firefox",
-      use: { ...devices["Desktop Firefox"] },
-    },
-    {
-      name: "webkit",
-      use: { ...devices["Desktop Safari"] },
-    },
+    // {
+    //   name: "firefox",
+    //   use: { ...devices["Desktop Firefox"] },
+    // },
+    // {
+    //   name: "webkit",
+    //   use: { ...devices["Desktop Safari"] },
+    // },
   ],
 });

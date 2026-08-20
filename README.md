@@ -1,29 +1,36 @@
 # playwright-session-kit
 
 A reusable Playwright + TypeScript setup whose whole job is **session management**:
-log in once, save the browser session to disk, and reuse it across every test
-run and every test file until it expires - instead of every test (or every
-run) re-doing a UI login.
+log in once by hand, save the browser session to disk, and reuse it across
+every test run and every test file - instead of every test (or every run)
+re-doing a UI login.
 
 Clone this repo into any project, point it at your app, and go.
 
 ## What it gives you
 
-- **One login per session lifetime, not per test.** A `globalSetup` hook logs
-  in once and saves Playwright's `storageState` (cookies + localStorage) to
-  `.auth/<key>.session.json`. Every test project then starts already
-  authenticated via `use.storageState`.
-- **Session reuse across runs.** The saved session file is reused on the next
-  `npm test` as long as it's younger than `SESSION_MAX_AGE_HOURS` - no
-  re-login unless it's actually stale.
-- **Env-first credentials, with a manual fallback.** Set `BASE_URL`,
-  `LOGIN_USERNAME`, `LOGIN_PASSWORD` in `.env` and it just works. Leave any of them out
-  and, on a local run, you're prompted for them in the terminal (password
-  input is masked) with an option to save what you typed back into `.env`.
-  On CI (`CI` env var set), missing values fail fast instead of prompting.
+- **One manual login, ever (until you delete it).** A `globalSetup` hook opens
+  a real, visible browser the first time there's no saved session, you log in
+  by hand, and it saves Playwright's `storageState` (cookies + localStorage) to
+  `.auth/<key>.session.json`. Every run after that just reuses the file - no
+  re-login, no expiry check, nothing to configure.
+- **Login defaults to manual, with an opt-in auto-click.** Set *both*
+  `LOGIN_USERNAME` and `LOGIN_PASSWORD` in `.env` and the login form is
+  filled in *and submitted* automatically. Leave *either one* unset and
+  neither field is pre-filled - you type both in and click login yourself.
+  It's all-or-nothing on purpose: pre-filling just one field and leaving the
+  other blank would be confusing to log in with by hand.
+- **Why manual is the safer default.** Many apps sit behind bot protection
+  (Cloudflare Turnstile, etc.) that invalidates a session the moment it's
+  reloaded into a browser context that was never actually driven by a human -
+  a scripted `fill()`/`click()` login can produce a session that looks fine
+  at save time but gets rejected (silently redirected to `/login`) the next
+  time it's reused. If your tests start seeing that, unset one of
+  `LOGIN_USERNAME`/`LOGIN_PASSWORD` to force the manual (human-click) path,
+  which doesn't have this problem.
 - **Multiple accounts side by side.** Set `SESSION_KEY` to namespace saved
-  sessions (e.g. `admin`, `viewer`) so switching users doesn't clobber
-  another session file.
+  sessions (e.g. `admin`, `viewer`) so logging in as a different account
+  doesn't clobber another saved session.
 
 ## Setup
 
@@ -32,18 +39,18 @@ npm install
 cp .env.example .env
 ```
 
-Fill in `.env` (or leave `LOGIN_USERNAME`/`LOGIN_PASSWORD` blank and answer the prompt on
-first run):
+Fill in `.env`:
 
 ```
 BASE_URL=https://your-app.example.com
-LOGIN_USERNAME=someone@example.com
-LOGIN_PASSWORD=your-password
 ```
 
-Then open `pages/login.page.ts` and paste in your app's real `data-testid`
-locators for the email/password inputs and submit button - that's the one
-file that talks to the actual login page, including SSO/MFA/multi-step flows.
+`LOGIN_USERNAME`/`LOGIN_PASSWORD` are optional (see above). Then open
+[pages/login.page.ts](pages/login.page.ts) and paste in your app's real
+`data-testid` locators for the email/password inputs and submit button -
+only needed if you want the pre-fill convenience or plan to write an
+automated login-flow test yourself; it's not required for the manual login
+step to work.
 
 ## Running tests
 
@@ -54,26 +61,28 @@ npm run test:ui       # Playwright UI mode
 npm run report        # open the last HTML report
 ```
 
-The first run logs in and saves a session; every run after that (within
-`SESSION_MAX_AGE_HOURS`) skips the login entirely.
+The first run has no saved session, so a real (non-headless) browser window
+opens pointed at `/login`. If both `LOGIN_USERNAME` and `LOGIN_PASSWORD` are
+set in `.env`, both fields are typed in and submit is clicked automatically;
+if either is missing, both fields are left blank for you to type in and
+submit by hand. Once redirected away from `/login`, the session is saved
+automatically and the browser closes. Every run after that reuses
+`.auth/<key>.session.json` as-is - forever, with no
+freshness check. If the app ever rejects it (password changed, session
+revoked, etc.), just delete the file and run again to redo the login:
 
-Sessions clear themselves automatically - there's no manual reset step:
-
-- A saved session untouched for `SESSION_TTL_DAYS` (default `7`) is discarded
-  and a fresh login is forced.
-- If login fails `LOGIN_FAILURE_THRESHOLD` (default `3`) times in a row for a
-  given `SESSION_KEY` (e.g. after a password change or the app rejecting the
-  saved session), the stale session file is wiped so the next run starts
-  clean instead of retrying against bad state forever.
-- A session file that isn't valid JSON (corrupted by a truncated write, disk
-  issue, etc.) is deleted on sight, before it's ever handed to Playwright.
+```bash
+rm .auth/default.session.json   # or whichever SESSION_KEY you're using
+npm test
+```
 
 ## Using this in your own tests
 
-Nothing special - just write tests as usual. They start already authenticated:
+Import `test`/`expect` from `fixtures/` (not `"@playwright/test"` directly) in
+every spec file:
 
 ```ts
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../fixtures";
 
 test("dashboard is visible", async ({ page }) => {
   await page.goto("/dashboard");
@@ -81,53 +90,52 @@ test("dashboard is visible", async ({ page }) => {
 });
 ```
 
-If a single test needs a *different* account than the global session, pull in
-the `authedPage`/`authedContext` fixture instead of hand-rolling a context:
-
-```ts
-import { test } from "../../fixtures/auth.fixture";
-
-test("as a different user", async ({ authedPage }) => {
-  // authedPage is already authenticated for the resolved SESSION_KEY
-  await authedPage.goto("/admin");
-});
-```
+That's what makes the session **self-healing**: `fixtures/auth.fixture.ts`
+overrides Playwright's `context` fixture to check for `.auth/<key>.session.json`
+right before each test's context is created - if it's there, it's just a fast
+file read; if it's missing (deleted, or `globalSetup` didn't run - some IDE
+test runners skip it for a single ad-hoc test), it triggers the manual-login
+flow itself instead of throwing `ENOENT`. Importing from `"@playwright/test"`
+directly skips this safety net and relies solely on `globalSetup` having run.
 
 ## Project layout
 
 ```
-playwright.config.ts        Playwright config; wires storageState to the saved session
+playwright.config.ts        Playwright config; globalSetup wires up the front-loaded login
 
 pages/                      Page Object Models - one file per major route
   base.page.ts              BasePage extended by all POMs
-  login.page.ts             The actual UI login steps - customize this per app
+  login.page.ts             Login form locators - customize this per app
 
 tests/                      Spec files - mirror pages/ structure
   auth/
     login.spec.ts           Example test running with an already-authenticated page
 
-fixtures/                   Reusable test setup (auth state injection)
-  auth.fixture.ts           authedContext/authedPage fixtures for a non-default session
+fixtures/                   Reusable test setup - import test/expect from here, not @playwright/test
+  index.ts                  Barrel: re-exports test/expect from auth.fixture.ts
+  auth.fixture.ts           Overrides `context` for a self-healing session (see above)
 
 helpers/                    Env accessors, global auth setup, session persistence
-  env.ts                    Reads .env, prompts for missing values, persists what you enter
-  prompt.ts                 Small terminal-prompt helpers (masked password input)
-  session-manager.ts        Session file read/write/freshness/auto-clear logic (the reusable core)
-  auth-setup.ts             Playwright globalSetup entry: resolves config, ensures a session
+  env.ts                    Reads .env (BASE_URL required, credentials optional)
+  prompt.ts                 Small terminal-prompt helper (askYesNo, used nowhere critical)
+  session-manager.ts        sessionFilePath() - where a given SESSION_KEY's file lives
+  auth-setup.ts             ensureManualSession() (shared logic) + globalSetup entry point
 
 .auth/                      Saved auth state (gitignored, auto-generated - never commit real sessions)
 ```
 
 ## CI
 
-Set `BASE_URL`, `LOGIN_USERNAME`, `LOGIN_PASSWORD` as CI secrets/variables and set `CI=1`
-(most CI providers set this automatically). No prompts will fire; missing
-values throw a clear error instead of hanging the pipeline.
+Manual login obviously doesn't work unheaded on CI. The practical pattern is
+to log in once locally, then commit that machine's `.auth/<key>.session.json`
+to a private secret store (not the repo - it's gitignored) and have CI
+restore it before running tests, refreshing it manually whenever it goes
+stale. `BASE_URL` must still be set as a CI secret/variable; it throws a
+clear error if missing rather than hanging.
 
 ## Why not just log in inside every test?
 
-Because a real UI login is slow and flaky compared to network calls, and
-almost every test needs the *result* of logging in, not the login flow
-itself. Doing it once per run (or once per `SESSION_MAX_AGE_HOURS`) and
-sharing the resulting session across every test file is faster and more
-stable, while still testing through the real UI at least once per session.
+Because a real UI login is slow, flaky, and - for apps behind bot protection -
+often blocked entirely when scripted. Logging in once by hand and sharing the
+resulting session across every test file is far more reliable than fighting
+an anti-bot system on every run.
