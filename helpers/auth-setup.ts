@@ -59,6 +59,11 @@ async function isSessionValid(config: AppConfig, authFile: string): Promise<bool
 async function withLoginLock(config: AppConfig, authFile: string, login: () => Promise<void>): Promise<void> {
   const lockDir = `${authFile}.lock`;
 
+  // The lock lives next to the session file, so its parent (.auth/) must
+  // exist before the first-ever mkdir attempt - a fresh checkout has no
+  // .auth/ directory yet (it's gitignored).
+  fs.mkdirSync(path.dirname(authFile), { recursive: true });
+
   for (;;) {
     try {
       fs.mkdirSync(lockDir, { recursive: false });
