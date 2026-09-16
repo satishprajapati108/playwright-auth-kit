@@ -5,11 +5,98 @@ import { AppConfig, resolveConfig } from "./env";
 import { sessionFilePath } from "./session-manager";
 import { LoginPage } from "../pages/login.page";
 
+// Per-process cache of session files already confirmed valid, so a
+// multi-test worker only pays the validation cost (a real page load) once
+// per run instead of before every single test.
+const validatedSessions = new Set<string>();
+
+// How long a lock directory can exist before we treat it as abandoned (e.g.
+// the process that created it crashed or was killed mid-login) and break it
+// ourselves rather than waiting on it forever.
+const LOCK_STALE_MS = 3 * 60 * 1000;
+
+/**
+ * Loads authFile's storageState into a throwaway headless context and
+ * confirms the app still treats it as logged in, by visiting baseUrl and
+ * checking we don't land back on /login. This is what makes session reuse
+ * dynamic: an existing file is no longer trusted just because it exists - a
+ * session that expired server-side (e.g. after several days) is detected
+ * here and treated as invalid instead of silently failing mid-test.
+ */
+async function isSessionValid(config: AppConfig, authFile: string): Promise<boolean> {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({ storageState: authFile });
+    const page = await context.newPage();
+    await page.goto(config.baseUrl, { waitUntil: "domcontentloaded" });
+    // Give a client-side auth redirect (common after an expired session) a
+    // moment to fire before reading the final URL.
+    await page.waitForURL(() => true, { timeout: 3000 }).catch(() => {});
+    const landedOnLogin = new URL(page.url()).pathname.includes("/login");
+    await context.close();
+    return !landedOnLogin;
+  } catch {
+    // Any failure here (corrupt storageState, network error, etc.) means we
+    // can't confirm the session works - treat it as invalid rather than
+    // risking a silent mid-test failure later.
+    return false;
+  } finally {
+    await browser.close();
+  }
+}
+
+/**
+ * Serializes the manual-login flow across concurrent Playwright workers
+ * using an atomic `mkdir` as a lock (mkdir fails with EEXIST if another
+ * worker already holds it, and is atomic across processes on every
+ * platform this kit targets). Without this, `fullyParallel` workers that
+ * all see a missing/invalid session file at the same time (e.g. an IDE test
+ * runner that skips globalSetup) would each open their own separate login
+ * browser window - you'd log into one and the rest would sit there still
+ * waiting on their own copy, which looks like "it keeps asking me to log in
+ * again".
+ */
+async function withLoginLock(config: AppConfig, authFile: string, login: () => Promise<void>): Promise<void> {
+  const lockDir = `${authFile}.lock`;
+
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir, { recursive: false });
+      break; // lock acquired
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+
+      // Another worker already finished the login while we were waiting.
+      if (fs.existsSync(authFile)) return;
+
+      const age = Date.now() - fs.statSync(lockDir).mtimeMs;
+      if (age > LOCK_STALE_MS) {
+        console.log("[session] Breaking a stale login lock left by a crashed/killed run.");
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        continue;
+      }
+
+      console.log("[session] Another worker is already logging in - waiting for it to finish...");
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+
+  try {
+    // Re-check after acquiring the lock: the file may have appeared while
+    // we were waiting our turn.
+    if (fs.existsSync(authFile) && (await isSessionValid(config, authFile))) return;
+    await login();
+  } finally {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
 /**
  * Returns the path to a saved session for this config, opening a real
- * (non-headless) browser to log in first if one doesn't exist yet - once
- * saved, that file is reused forever (delete it yourself to force a
- * re-login).
+ * (non-headless) browser to log in first if one doesn't exist yet or if the
+ * existing one no longer works - once saved, that file is reused as long as
+ * it keeps validating successfully (delete it yourself to force a re-login
+ * immediately).
  *
  * If BOTH LOGIN_USERNAME and LOGIN_PASSWORD are set, both fields get filled
  * in and submit gets clicked automatically. If either one is missing, NEITHER
@@ -24,10 +111,24 @@ export async function ensureManualSession(config: AppConfig): Promise<string> {
   const authFile = sessionFilePath(config.sessionKey);
 
   if (fs.existsSync(authFile)) {
-    console.log(`[session] Using saved session for "${config.sessionKey}" (${authFile})`);
-    return authFile;
+    if (validatedSessions.has(authFile)) {
+      return authFile;
+    }
+    if (await isSessionValid(config, authFile)) {
+      validatedSessions.add(authFile);
+      console.log(`[session] Verified saved session for "${config.sessionKey}" is still valid (${authFile})`);
+      return authFile;
+    }
+    console.log(`[session] Saved session for "${config.sessionKey}" is expired or invalid - re-authenticating.`);
+    fs.rmSync(authFile, { force: true });
   }
 
+  await withLoginLock(config, authFile, () => runManualLogin(config, authFile));
+  validatedSessions.add(authFile);
+  return authFile;
+}
+
+async function runManualLogin(config: AppConfig, authFile: string): Promise<void> {
   console.log("\n=== Manual login required ===");
   console.log("A browser window will open. Log in by hand, then it will close automatically.");
   console.log("Your session will be saved and reused for every test run after this.\n");
@@ -100,7 +201,6 @@ export async function ensureManualSession(config: AppConfig): Promise<string> {
   await browser.close();
 
   console.log(`[session] Login successful. Session saved to ${authFile}\n`);
-  return authFile;
 }
 
 /**

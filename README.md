@@ -11,11 +11,12 @@ Clone this repo into any project, point it at your app, and go.
 
 ## What it gives you
 
-- **One manual login, ever (until you delete it).** A `globalSetup` hook opens
-  a real, visible browser the first time there's no saved session, you log in
-  by hand, and it saves Playwright's `storageState` (cookies + localStorage) to
-  `.auth/<key>.session.json`. Every run after that just reuses the file - no
-  re-login, no expiry check, nothing to configure.
+- **One manual login, reused until it actually stops working.** A
+  `globalSetup` hook opens a real, visible browser the first time there's no
+  saved session, you log in by hand, and it saves Playwright's `storageState`
+  (cookies + localStorage) to `.auth/<key>.session.json`. Every run after that
+  reuses the file automatically - see **Session validation** below for how
+  expiry is detected and handled without you doing anything.
 - **Login defaults to manual, with an opt-in auto-click.** Set *both*
   `LOGIN_USERNAME` and `LOGIN_PASSWORD` in `.env` and the login form is
   filled in *and submitted* automatically. Leave *either one* unset and
@@ -75,14 +76,37 @@ set in `.env`, both fields are typed in and submit is clicked automatically;
 if either is missing, both fields are left blank for you to type in and
 submit by hand. Once redirected away from `/login`, the session is saved
 automatically and the browser closes. Every run after that reuses
-`.auth/<key>.session.json` as-is - forever, with no
-freshness check. If the app ever rejects it (password changed, session
-revoked, etc.), just delete the file and run again to redo the login:
+`.auth/<key>.session.json` - see **Session validation** below for what
+happens once that file goes stale. You can still force an immediate re-login
+yourself at any time:
 
 ```bash
 rm .auth/default.session.json   # or whichever SESSION_KEY you're using
 npm test
 ```
+
+### Session validation
+
+`ensureManualSession()` doesn't just trust that `.auth/<key>.session.json`
+exists - before reusing it, it loads the file into a throwaway headless
+context, visits `BASE_URL`, and checks whether the app redirects back to
+`/login`. That's how a session that expired server-side (e.g. you haven't run
+the suite in over a week and the app's session TTL passed) gets caught
+automatically: the stale file is deleted and a fresh login runs right away
+(auto-filled if `LOGIN_USERNAME`/`LOGIN_PASSWORD` are set, otherwise a
+headed browser opens for you to log in by hand) - no manual "delete the file
+and retry" step needed. This check only runs once per test-run process
+(cached after the first pass), so it doesn't add a page load before every
+single test.
+
+Because `fullyParallel` runs each test file in its own worker, more than one
+worker can discover a missing/expired session at the same moment - without
+protection they'd each open their *own* separate login browser window,
+which looks like "I logged in, but the next test is asking me to log in
+again." `ensureManualSession()` guards against this with a simple
+cross-process lock (an atomic `mkdir` next to the session file): only one
+worker performs the login; every other worker waits for it to finish and
+then reuses the session it just saved.
 
 ## Using this in your own tests
 
